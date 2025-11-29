@@ -1,0 +1,48 @@
+name: Build Offline Deployment Package
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build-and-package:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build Frontend Image
+      run: docker build -f Dockerfile.txt -t carsi-monitor-web:latest .
+
+    - name: Build Backend Image
+      run: docker build -f Dockerfile.backend.txt -t carsi-monitor-api:latest .
+
+    - name: Save Docker Images
+      run: docker save -o images.tar carsi-monitor-web:latest carsi-monitor-api:latest
+
+    - name: Prepare Artifact
+      run: |
+        mkdir dist
+        mv images.tar dist/
+        cp docker-compose-offline.yml dist/docker-compose.yml
+        cp offline_installer.sh.txt dist/install.sh
+        chmod +x dist/install.sh
+        
+        cat > dist/README.txt <<EOF
+        CARSI Monitor - Offline Package
+        1. Upload to server.
+        2. Unzip.
+        3. Run: sh install.sh
+        EOF
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: carsi-monitor-offline-package
+        path: dist/
+        retention-days: 5
