@@ -1,0 +1,17 @@
+FROM python:3.9-slim
+
+WORKDIR /app
+
+# Install dependencies
+RUN pip install flask flask-cors
+
+# Copy the backend script
+COPY backend_server.py.txt ./backend_server.py
+
+# Create logs directory for mounting
+RUN mkdir /logs
+
+EXPOSE 5000
+
+# Run the application
+CMD ["python", "backend_server.py"]

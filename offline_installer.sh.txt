@@ -1,0 +1,50 @@
+#!/bin/bash
+
+# =================================================================
+# CARSI 离线安装脚本 (Server Side)
+# =================================================================
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+echo -e "${GREEN}>>> 1. 检查 Docker 环境...${NC}"
+if ! command -v docker &> /dev/null; then
+    echo -e "${RED}错误: 未安装 Docker${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}>>> 2. 加载镜像...${NC}"
+if [ -f "images.tar" ]; then
+    docker load -i images.tar
+else
+    echo -e "${RED}错误: 未找到 images.tar${NC}"
+    exit 1
+fi
+
+# 验证
+if ! docker images | grep -q "carsi-monitor-web"; then
+    echo -e "${RED}错误: 镜像加载失败${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}>>> 3. 启动服务...${NC}"
+
+# 自动寻找配置文件
+COMPOSE_FILE="docker-compose.yml"
+if [ ! -f "$COMPOSE_FILE" ]; then
+    if [ -f "docker-compose-offline.yml" ]; then
+        COMPOSE_FILE="docker-compose-offline.yml"
+    else
+        echo -e "${RED}错误: 未找到配置文件${NC}"
+        exit 1
+    fi
+fi
+
+echo "使用配置: $COMPOSE_FILE"
+
+# 重启容器
+docker compose -f $COMPOSE_FILE down 2>/dev/null || docker-compose -f $COMPOSE_FILE down 2>/dev/null
+docker compose -f $COMPOSE_FILE up -d || docker-compose -f $COMPOSE_FILE up -d
+
+echo -e "${GREEN}>>> 部署成功! 访问 http://localhost:8888${NC}"

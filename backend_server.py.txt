@@ -1,0 +1,161 @@
+import os
+import re
+import time
+import sys
+import json
+from datetime import datetime
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)
+
+LOG_DIR = "/logs"
+PROCESS_LOG = os.path.join(LOG_DIR, "idp-process.log")
+
+def normalize_timestamp(raw_str):
+    """
+    Convert log timestamps (e.g., '2024-11-28 14:00:00,123') to standard ISO format
+    (e.g., '2024-11-28T14:00:00.123Z') to prevent frontend crashes.
+    """
+    try:
+        raw_str = raw_str.strip()
+        # Handle '2024-11-28 14:00:00,123' -> '2024-11-28T14:00:00.123'
+        if ' ' in raw_str and 'T' not in raw_str:
+            raw_str = raw_str.replace(' ', 'T')
+        if ',' in raw_str:
+            raw_str = raw_str.replace(',', '.')
+        return raw_str
+    except:
+        # Fallback to current time if parsing fails
+        return datetime.now().isoformat()
+
+def parse_logs():
+    logs = []
+    
+    if not os.path.exists(PROCESS_LOG):
+        return []
+
+    try:
+        # Read last 500KB to ensure we cover enough history
+        lines = []
+        try:
+            with open(PROCESS_LOG, 'r', encoding='utf-8', errors='ignore') as f:
+                f.seek(0, os.SEEK_END)
+                file_size = f.tell()
+                f.seek(max(file_size - 500000, 0)) 
+                lines = f.readlines()
+        except PermissionError:
+             return []
+
+        # Parse from newest to oldest
+        for line in reversed(lines):
+            if len(logs) >= 50: break
+            
+            # 1. Timestamp Extraction
+            parts = line.split(' - ')
+            if len(parts) < 3: continue
+            
+            raw_time = parts[0].strip()
+            iso_time = normalize_timestamp(raw_time)
+            msg = parts[-1].strip()
+
+            # 2. User Extraction
+            user = "Unknown"
+            user_match = re.search(r"(?:Login by|Subject:|Principal|for principal|identified as)\s+['\"]?([a-zA-Z0-9_@\.-]+)['\"]?", msg, re.IGNORECASE)
+            if user_match:
+                user = user_match.group(1)
+                if user.lower() in ['subject', 'principal', 'null', 'none']: 
+                    user = "Unknown"
+
+            # 3. SP Extraction
+            sp = "Unknown SP"
+            sp_match = re.search(r"(?:to|relying party|peer entity)\s+['\"]?([a-zA-Z0-9:\./-]+)['\"]?", msg, re.IGNORECASE)
+            if sp_match:
+                sp = sp_match.group(1)
+
+            # 4. Status Determination
+            status = "SUCCESS"
+            if "fail" in line.lower() or "error" in line.lower() or "exception" in line.lower() or "warn" in line.lower():
+                status = "FAILURE"
+
+            # Filter Logic
+            if (user != "Unknown" and sp != "Unknown SP") or "Authentication success" in msg or "Profile Action" in msg:
+                
+                # Deduplication
+                duplicate = False
+                for existing in logs:
+                    if existing['spEntityId'] == sp and existing['userPrincipal'] == user:
+                        try:
+                            if existing['timestamp'][:16] == iso_time[:16]: 
+                                duplicate = True
+                                break
+                        except:
+                            pass
+                if duplicate: continue
+
+                steps = [
+                    {"id": "1", "name": "请求接入", "status": "success", "timestamp": iso_time, "details": "Received SAML Request", "durationMs": 10},
+                    {"id": "2", "name": "身份认证", "status": "failure" if status == "FAILURE" else "success", "timestamp": iso_time, "details": f"User: {user}", "durationMs": 50},
+                    {"id": "3", "name": "属性释放", "status": "success", "timestamp": iso_time, "details": f"Released to {sp}", "durationMs": 20}
+                ]
+
+                logs.append({
+                    "id": f"REQ-{abs(hash(line))}",
+                    "timestamp": iso_time,
+                    "spEntityId": sp,
+                    "userPrincipal": user,
+                    "status": status,
+                    "durationMs": 80,
+                    "steps": steps,
+                    "rawLogs": [line],
+                    "auditLog": f"{iso_time}|{status}|{user}|{sp}"
+                })
+                
+    except Exception as e:
+        print(f"Parser Error: {e}")
+        return []
+
+    return logs
+
+@app.route('/api/health')
+def health():
+    exists = os.path.exists(PROCESS_LOG)
+    return jsonify({
+        "status": "ok", 
+        "log_path": PROCESS_LOG,
+        "file_exists": exists
+    })
+
+@app.route('/api/debug')
+def debug_file():
+    if not os.path.exists(PROCESS_LOG):
+        return jsonify({
+            "error": "File not found", 
+            "path": PROCESS_LOG, 
+            "hint": "Check docker-compose volumes"
+        })
+    
+    try:
+        stat = os.stat(PROCESS_LOG)
+        with open(PROCESS_LOG, 'r', encoding='utf-8', errors='ignore') as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(size - 10000, 0))
+            tail = f.readlines()
+            
+        return jsonify({
+            "path": PROCESS_LOG,
+            "size_bytes": stat.st_size,
+            "tail_20_lines": tail[-20:],
+            "parsed_sample": parse_logs()[:3]
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route('/api/logs')
+def get_logs():
+    return jsonify(parse_logs())
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)

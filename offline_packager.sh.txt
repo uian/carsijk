@@ -1,0 +1,58 @@
+#!/bin/bash
+
+# =================================================================
+# CARSI 离线安装包生成脚本 (Offline Packager)
+# =================================================================
+
+# 1. 检查文件完整性
+if [ ! -f "Dockerfile.txt" ] || [ ! -f "Dockerfile.backend.txt" ]; then
+    echo "错误: 缺少 Dockerfile.txt 或 Dockerfile.backend.txt"
+    exit 1
+fi
+
+echo ">>> 1. 开始构建镜像..."
+# 使用 --no-cache 确保获取最新的 package.json 修改
+docker build --no-cache -f Dockerfile.txt -t carsi-monitor-web:latest .
+if [ $? -ne 0 ]; then
+    echo "错误: 前端镜像构建失败。"
+    exit 1
+fi
+
+echo "Building carsi-monitor-api..."
+docker build -f Dockerfile.backend.txt -t carsi-monitor-api:latest .
+if [ $? -ne 0 ]; then
+    echo "错误: 后端镜像构建失败。"
+    exit 1
+fi
+
+echo ">>> 2. 导出镜像..."
+docker save -o images.tar carsi-monitor-web:latest carsi-monitor-api:latest
+
+echo ">>> 3. 生成部署包 deploy_package.zip..."
+rm -rf deploy_temp
+mkdir -p deploy_temp
+mv images.tar deploy_temp/
+
+# 重要: 将 offline 配置重命名为标准名
+if [ -f "docker-compose-offline.yml" ]; then
+    cp docker-compose-offline.yml deploy_temp/docker-compose.yml
+else
+    echo "错误: 缺少 docker-compose-offline.yml"
+    exit 1
+fi
+
+cp offline_installer.sh.txt deploy_temp/install.sh
+
+cat > deploy_temp/README.txt <<EOF
+安装说明:
+1. 解压: unzip deploy_package.zip -d carsi-monitor
+2. 运行: cd carsi-monitor && sh install.sh
+EOF
+
+cd deploy_temp
+chmod +x install.sh
+zip -r ../deploy_package.zip .
+cd ..
+rm -rf deploy_temp
+
+echo ">>> 打包完成! 文件名: deploy_package.zip"

@@ -1,0 +1,32 @@
+services:
+  web:
+    container_name: carsi-monitor-web
+    build:
+      context: .
+      dockerfile: Dockerfile.txt
+    ports:
+      - "8888:80"
+    restart: unless-stopped
+    depends_on:
+      - api
+    networks:
+      - monitor-net
+
+  api:
+    container_name: carsi-monitor-api
+    build:
+      context: .
+      dockerfile: Dockerfile.backend.txt
+    volumes:
+      # CRITICAL: Mount the host's log directory to the container
+      # Adjust /opt/shibboleth-idp/logs if your path is different
+      - /opt/shibboleth-idp/logs:/logs:ro
+    expose:
+      - "5000"
+    restart: unless-stopped
+    networks:
+      - monitor-net
+
+networks:
+  monitor-net:
+    driver: bridge
